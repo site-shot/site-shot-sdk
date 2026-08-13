@@ -123,15 +123,15 @@ SDK update.
 | `height` | int 100–20000 | 768 | viewport height |
 | `zoom` | int 5–1000 | 100 | percentage zoom |
 | `full_size` | boolean | false | full-page capture (height capped by `max_height`) |
-| `max_height` | int 100–20000 | 15000 | only meaningful with `full_size` |
+| `max_height` | int 100–20000 | 20000 | only meaningful with `full_size` |
 | `scaled_width` | int 50–10000 | — | scale result image to width |
 | `format` | `png` \| `jpeg` | png | |
-| `delay_time` | int ms 0–60000 | 1500 | wait before capture (SPAs, animations) |
+| `delay_time` | int ms 0–60000 | 500 | wait before capture (SPAs, animations) |
 | `timeout` | int ms 0–120000 | 60000 | server-side render deadline |
 | `user_agent` | string | — | custom UA for the rendering browser |
 | `request_headers` | object | — | emitted as repeated `request_header=Name:value` params |
 | `http_proxy` / `proxy_username` / `proxy_password` | string | — | bring-your-own-proxy passthrough |
-| `proxy_rotation` | boolean | true | |
+| `proxy_rotation` | boolean \| 0 \| 1 | — | omit and Site-Shot picks the route; `1` rotates a proxy on every attempt; `0` makes one attempt without rotation (via `country` if set, else direct) |
 | `source_code` | boolean | false | include rendered HTML (use with `captureJson`) |
 | `javascript_code` | string | — | inject JS into the page before capture |
 | `no_ads` | boolean | false | remove ads |

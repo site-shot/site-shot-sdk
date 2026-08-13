@@ -57,13 +57,13 @@ export interface CaptureOptions {
   zoom?: number;
   /** Capture the full scrollable page (height capped by `max_height`). */
   full_size?: boolean | 0 | 1;
-  /** Height cap for `full_size` captures, 100–20000. API default: 15000. */
+  /** Height cap for `full_size` captures, 100–20000. API default: 20000. */
   max_height?: number;
   /** Scale the result image to this width, 50–10000. */
   scaled_width?: number;
   /** Image format. API default: `png`. */
   format?: "png" | "jpeg";
-  /** Wait this many ms before capturing, 0–60000. API default: 1500. */
+  /** Wait this many ms before capturing, 0–60000. API default: 500. */
   delay_time?: number;
   /** Server-side render deadline in ms, 0–120000. API default: 60000. */
   timeout?: number;
@@ -78,7 +78,12 @@ export interface CaptureOptions {
   http_proxy?: string;
   proxy_username?: string;
   proxy_password?: string;
-  /** API default: 1. */
+  /**
+   * Route selection. There is no default, and omitting this is not the same as passing
+   * either value: leave it out and Site-Shot picks the route (recommended). `1` sends every
+   * attempt through a rotating proxy. `0` makes a single attempt without rotation — through
+   * one proxy of `country` when a country is set, otherwise direct.
+   */
   proxy_rotation?: boolean | 0 | 1;
   /** Include the rendered HTML in the JSON result (use with `captureJson`). */
   source_code?: boolean | 0 | 1;
