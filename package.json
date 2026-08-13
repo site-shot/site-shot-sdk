@@ -1,6 +1,6 @@
 {
   "name": "site-shot-sdk",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Official Node.js SDK for the Site-Shot screenshot API — capture website screenshots in a real Chromium browser (full-page, country proxies, ad & cookie-banner removal). Zero runtime dependencies.",
   "type": "module",
   "sideEffects": false,
