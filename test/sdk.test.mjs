@@ -242,72 +242,202 @@ test("uses global fetch by default", async (t) => {
 
 // ---------------------------------------------------------------------------
 // Error taxonomy
+//
+// The fixtures below are the API's REAL error envelopes, not invented shapes.
+// The API uses two different error keys depending on how the request failed:
+//
+//   A. A request rejected before capture starts answers a non-2xx status with
+//      {"message": "..."} — never an `error` key.
+//   B. A failure during capture answers HTTP *200* and the capture envelope,
+//      which carries `error` plus a placeholder error `image`. It never sets a
+//      top-level `message`.
+//
+// Provenance of each fixture is noted inline. "live" = captured against
+// https://api.site-shot.com on 2026-08-13; "derived" = reconstructed from the
+// API implementation.
 // ---------------------------------------------------------------------------
 
-test("country_unavailable envelope (HTTP 200) throws CountryUnavailableError", async () => {
-  const fetchImpl = makeFetch(jsonResponse({ error: "country_unavailable" }));
+/**
+ * Real during-capture failure envelope (shape B): HTTP 200, an `error` key,
+ * and a placeholder error image posing as a screenshot. `response.status_code`
+ * carries the internal failure status — it is NOT the HTTP status of the API
+ * response, which is 200 on this path. Derived from the API implementation.
+ */
+function appErrorEnvelope(message, internalStatus) {
+  return {
+    screenshot_parameters: {
+      format: "png",
+      request_headers: [],
+      response_type: "json",
+      url: "https://example.com/",
+      width: 1024,
+      height: 768,
+      zoom: 100,
+      full_size: "0",
+      no_ads: 0,
+      no_cookie_popup: 0,
+      source_code: 0,
+      proxy_rotation: "1",
+    },
+    response: { status_code: internalStatus, headers: [] },
+    image: `data:image/png;base64,${PIXELS_B64}`,
+    error: message,
+  };
+}
+
+test("real country_unavailable envelope (capture failure, HTTP 200) throws CountryUnavailableError", async () => {
+  // derived: a strict_country capture with no capacity fails with
+  // 'country_unavailable' and an internal 503, carried in the `error` key. The
+  // documented public contract is likewise `"error": "country_unavailable"`.
+  const body = appErrorEnvelope("country_unavailable", 503);
+  const fetchImpl = makeFetch(jsonResponse(body));
   const client = new SiteShot("test-key", { fetchImpl });
   await assert.rejects(
     client.capture({ url: "https://example.com/", country: "DE", strict_country: true }),
     (err) => {
       assert.ok(err instanceof CountryUnavailableError);
       assert.ok(err instanceof SiteShotError);
+      // The transport status really is 200 — the 503 lives inside the body.
       assert.equal(err.httpStatus, 200);
-      assert.deepEqual(err.body, { error: "country_unavailable" });
+      assert.deepEqual(err.body, body);
       return true;
     },
   );
 });
 
-test("country_unavailable envelope on a non-200 status still classifies correctly", async () => {
-  const fetchImpl = makeFetch(jsonResponse({ error: "country_unavailable" }, 404));
+test("capture-failure envelope never leaks its placeholder image as a screenshot", async () => {
+  // The regression this guards: the envelope carries a valid base64 `image`,
+  // so failing to read `error` would return the "screenshot creation error"
+  // placeholder as a successful capture.
+  const fetchImpl = makeFetch(jsonResponse(appErrorEnvelope("Screenshot capture failed", 500)));
+  const client = new SiteShot("test-key", { fetchImpl });
+  await assert.rejects(client.capture({ url: "https://example.com/" }), SiteShotError);
+});
+
+test("real 401 envelopes (message key) throw AuthError carrying the message", async () => {
+  const cases = [
+    // live: curl "https://api.site-shot.com/?url=...&userkey=<invalid>"
+    { status: 401, body: { message: "Invalid authentication credentials" } },
+    // live: same URL with the userkey param omitted or empty
+    { status: 401, body: { message: "No API key found in request" } },
+  ];
+  for (const { status, body } of cases) {
+    const fetchImpl = makeFetch(jsonResponse(body, status));
+    const client = new SiteShot("test-key", { fetchImpl });
+    await assert.rejects(client.capture({ url: "https://example.com/" }), (err) => {
+      assert.ok(err instanceof AuthError);
+      assert.equal(err.httpStatus, status);
+      assert.deepEqual(err.body, body);
+      // The whole point of the fix: the API's message must survive into the
+      // error text instead of being silently dropped.
+      assert.ok(
+        err.message.includes(body.message),
+        `expected "${body.message}" in: ${err.message}`,
+      );
+      return true;
+    });
+  }
+});
+
+test("real 403 envelope (no active subscription) throws QuotaError, not AuthError", async () => {
+  // derived: an account whose subscription is inactive is rejected with 403 and
+  // {"message": "No active subscription found"}. Not reproducible live without
+  // such an account.
+  //
+  // 403 is a billing state, not a key problem — the key is valid, the
+  // subscription lapsed — so it must NOT tell the user to check their key.
+  const body = { message: "No active subscription found" };
+  const fetchImpl = makeFetch(jsonResponse(body, 403));
+  const client = new SiteShot("test-key", { fetchImpl });
+  await assert.rejects(client.capture({ url: "https://example.com/" }), (err) => {
+    assert.ok(err instanceof QuotaError);
+    assert.ok(!(err instanceof AuthError));
+    assert.equal(err.httpStatus, 403);
+    assert.deepEqual(err.body, body);
+    assert.ok(err.message.includes("No active subscription found"));
+    return true;
+  });
+});
+
+test("a `message` key on a successful 2xx capture is metadata, not an error", async () => {
+  // `message` only signals failure on a non-2xx rejection, so it must never
+  // turn a successful capture into a throw.
+  const fetchImpl = makeFetch(jsonResponse({ image: PIXELS_B64, message: "rendered from DE" }));
+  const client = new SiteShot("test-key", { fetchImpl });
+  assert.deepEqual(await client.capture({ url: "https://example.com/" }), PIXELS);
+});
+
+test("an `error` key still wins over a sibling `message` key", async () => {
+  const fetchImpl = makeFetch(
+    jsonResponse({ error: "country_unavailable", message: "informational" }, 200),
+  );
   const client = new SiteShot("test-key", { fetchImpl });
   await assert.rejects(
-    client.capture({ url: "https://example.com/", country: "BR", strict_country: true }),
+    client.capture({ url: "https://example.com/" }),
     CountryUnavailableError,
   );
 });
 
-test("HTTP 401/403 throw AuthError", async () => {
-  for (const status of [401, 403]) {
-    const fetchImpl = makeFetch(jsonResponse({ error: "invalid userkey" }, status));
+test("rejections classify by status even when the body carries no text", async () => {
+  // Defensive: a 401/403 whose body the SDK cannot mine for a message must
+  // still classify by status rather than fall through to APIError — 401 as a
+  // key problem, 403 as a subscription problem.
+  const cases = [
+    { status: 401, expected: AuthError },
+    { status: 403, expected: QuotaError },
+  ];
+  for (const { status, expected } of cases) {
+    const fetchImpl = makeFetch(jsonResponse({}, status));
     const client = new SiteShot("test-key", { fetchImpl });
-    await assert.rejects(client.capture({ url: "https://example.com/" }), AuthError);
+    await assert.rejects(client.capture({ url: "https://example.com/" }), expected);
   }
 });
 
-test("auth-flavoured in-band error (HTTP 200) throws AuthError", async () => {
-  const fetchImpl = makeFetch(jsonResponse({ error: "Invalid userkey" }));
-  const client = new SiteShot("test-key", { fetchImpl });
-  await assert.rejects(client.capture({ url: "https://example.com/" }), AuthError);
-});
-
 test("HTTP 402/429 throw QuotaError", async () => {
+  // NOTE: no evidence api.site-shot.com currently emits either status — no
+  // request rate limiting is applied, and the capture path never sets a non-2xx
+  // status in json mode. These stay as defensive status-only mappings; the
+  // bodies use the same shape as every other non-2xx rejection.
   for (const status of [402, 429]) {
-    const fetchImpl = makeFetch(new Response("limit", { status }));
+    const fetchImpl = makeFetch(jsonResponse({ message: "API rate limit exceeded" }, status));
     const client = new SiteShot("test-key", { fetchImpl });
     await assert.rejects(client.capture({ url: "https://example.com/" }), QuotaError);
   }
 });
 
-test("quota-flavoured in-band error throws QuotaError", async () => {
-  const fetchImpl = makeFetch(jsonResponse({ error: "monthly quota exceeded" }));
+test("quota-flavoured capture failure throws QuotaError", async () => {
+  const fetchImpl = makeFetch(jsonResponse(appErrorEnvelope("monthly quota exceeded", 402)));
   const client = new SiteShot("test-key", { fetchImpl });
   await assert.rejects(client.capture({ url: "https://example.com/" }), QuotaError);
 });
 
-test("HTTP 400 throws InvalidParamsError", async () => {
-  const fetchImpl = makeFetch(jsonResponse({ error: "width out of range" }, 400));
+test("param-flavoured capture failure throws InvalidParamsError", async () => {
+  const fetchImpl = makeFetch(jsonResponse(appErrorEnvelope("width out of range", 400)));
   const client = new SiteShot("test-key", { fetchImpl });
   await assert.rejects(client.capture({ url: "https://example.com/", width: 9 }), InvalidParamsError);
 });
 
 test("HTTP 500 throws APIError with status and body attached", async () => {
+  // A non-JSON 5xx is what an HTML error page from the edge looks like.
   const fetchImpl = makeFetch(new Response("upstream exploded", { status: 500 }));
   const client = new SiteShot("test-key", { fetchImpl });
   await assert.rejects(client.capture({ url: "https://example.com/" }), (err) => {
     assert.ok(err instanceof APIError);
     assert.equal(err.httpStatus, 500);
+    return true;
+  });
+});
+
+test("5xx in the API's JSON error shape surfaces its message", async () => {
+  // The same {"message": ...} envelope is used for upstream failures as for
+  // rejections, so a 502/503 must be mined the same way.
+  const body = { message: "Service temporarily unavailable" };
+  const fetchImpl = makeFetch(jsonResponse(body, 503));
+  const client = new SiteShot("test-key", { fetchImpl });
+  await assert.rejects(client.capture({ url: "https://example.com/" }), (err) => {
+    assert.ok(err instanceof APIError);
+    assert.equal(err.httpStatus, 503);
+    assert.ok(err.message.includes("Service temporarily unavailable"), err.message);
     return true;
   });
 });
