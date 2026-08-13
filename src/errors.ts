@@ -34,7 +34,11 @@ export class SiteShotError extends Error {
 /** Missing or rejected API key (`userkey`). */
 export class AuthError extends SiteShotError {}
 
-/** Plan quota exhausted or payment required. */
+/**
+ * Plan quota exhausted, payment required, or the account has no active
+ * subscription. Distinct from {@link AuthError}: the API key is valid, the
+ * plan behind it is not.
+ */
 export class QuotaError extends SiteShotError {}
 
 /**

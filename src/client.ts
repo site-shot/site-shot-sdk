@@ -164,6 +164,10 @@ function stripDataUrlPrefix(image: string): string {
   return image;
 }
 
+function asErrorText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
 function isAbortError(err: unknown): boolean {
   return (
     typeof err === "object" &&
@@ -183,14 +187,20 @@ function classifyError(status: number, errorText: string | undefined, body: unkn
       opts,
     );
   }
-  if (/userkey|api.?key|invalid key|unauthoriz|forbidden|authenticat/.test(lower) || status === 401 || status === 403) {
+  // 401 is the only status that means "the key itself was rejected": it is what
+  // the API returns for a missing or unknown `userkey`.
+  if (/userkey|api.?key|invalid key|unauthoriz|forbidden|authenticat/.test(lower) || status === 401) {
     return new AuthError(
       `Site-Shot rejected the API key${errorText ? `: ${errorText}` : ""}. ` +
         "Check the key or get one at https://www.site-shot.com/pricing/.",
       opts,
     );
   }
-  if (status === 402 || status === 429 || /quota|limit exceed|payment|credit|subscription/.test(lower)) {
+  // 403 is a *billing* state, not a key problem: the API returns it when the
+  // account has no active subscription, and a bad or missing key is always a
+  // 401. Classifying it as AuthError would send users to check a key that is
+  // perfectly valid.
+  if (status === 402 || status === 403 || status === 429 || /quota|limit exceed|payment|credit|subscription/.test(lower)) {
     return new QuotaError(
       `Site-Shot quota or payment issue${errorText ? `: ${errorText}` : ` (HTTP ${status})`}.`,
       opts,
@@ -399,12 +409,29 @@ export class SiteShot {
 
     if (json && typeof json === "object") {
       const envelope = json as Record<string, unknown>;
-      const errorText = envelope.error;
-      if (typeof errorText === "string" && errorText) {
-        throw classifyError(res.status, errorText, envelope);
+
+      // The API uses two different error keys depending on how the request
+      // failed, so both have to be read. The real envelopes are pinned as
+      // fixtures in test/sdk.test.mjs.
+      //
+      // 1. A failure *during capture* comes back as HTTP *200* — the failure
+      //    status does not survive onto the response — with the capture
+      //    envelope carrying `error` alongside a placeholder error `image`.
+      //    Checking `error` on every status, not just non-2xx, is what stops
+      //    that placeholder being handed back as if it were a screenshot.
+      const appError = asErrorText(envelope.error);
+      if (appError) {
+        throw classifyError(res.status, appError, envelope);
       }
+
+      // 2. A request rejected *before capture starts* (bad or missing key,
+      //    inactive subscription) comes back on a non-2xx status with
+      //    `message`. `message` is deliberately NOT read on a 2xx: only that
+      //    rejection path uses the key for failures, so treating it as an
+      //    error signal on a successful capture would turn any future metadata
+      //    field named `message` into a spurious throw.
       if (!res.ok) {
-        throw classifyError(res.status, undefined, envelope);
+        throw classifyError(res.status, asErrorText(envelope.message), envelope);
       }
       return envelope as CaptureResult;
     }
