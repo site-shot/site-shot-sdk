@@ -82,6 +82,21 @@ test("auth goes in the userkey query param, never in a header", async () => {
   assert.ok(!JSON.stringify(headers).includes("test-key"));
 });
 
+test("the User-Agent version matches the published package version", async () => {
+  // A release that bumps package.json without bumping SDK_VERSION ships
+  // silently: every request keeps identifying itself as the older release, so
+  // any per-version analysis of API traffic is wrong and the skew is invisible
+  // until someone reads both files side by side. 0.1.2 shipped exactly that way.
+  const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  const fetchImpl = makeFetch(jsonResponse({ image: PIXELS_B64 }));
+  const client = new SiteShot("test-key", { fetchImpl });
+  await client.capture({ url: "https://example.com/" });
+  assert.equal(
+    fetchImpl.calls[0].init.headers["user-agent"],
+    `site-shot-sdk/${pkg.version} node`,
+  );
+});
+
 test("per-call userkey cannot override the constructor key", async () => {
   const fetchImpl = makeFetch(jsonResponse({ image: PIXELS_B64 }));
   const client = new SiteShot("test-key", { fetchImpl });
