@@ -77,9 +77,9 @@ const url = client.buildUrl({ url: "https://example.com/", width: 1280 });
 ## Screenshots from another country
 
 Pass `country` as an **ISO 3166-1 alpha-2 code** (e.g. `"DE"`, `"BR"`, `"JP"` —
-44 countries available, see <https://www.site-shot.com/countries/>). It
-automatically sets a matching IP, language, time zone, and geolocation. Full
-country names are not valid values.
+the current list is at <https://www.site-shot.com/countries/>). It automatically
+sets a matching IP, language, time zone, and geolocation. Full country names are
+not valid values.
 
 By default, if the requested country has no capacity at that moment, the API
 silently falls back to a US vantage point. Set `strict_country` to fail fast
