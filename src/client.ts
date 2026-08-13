@@ -189,7 +189,13 @@ function classifyError(status: number, errorText: string | undefined, body: unkn
   }
   // 401 is the only status that means "the key itself was rejected": it is what
   // the API returns for a missing or unknown `userkey`.
-  if (/userkey|api.?key|invalid key|unauthoriz|forbidden|authenticat/.test(lower) || status === 401) {
+  //
+  // "forbidden" is deliberately NOT in this pattern. A capture that fails
+  // upstream reports the failing HTTP status line verbatim, so `error` can read
+  // "403 Forbidden" on an otherwise-200 response — a valid key blamed for
+  // something it did not cause. A real key rejection always arrives either as a
+  // 401 or with text naming the key, credentials or authentication.
+  if (/userkey|api.?key|invalid key|unauthoriz|authenticat/.test(lower) || status === 401) {
     return new AuthError(
       `Site-Shot rejected the API key${errorText ? `: ${errorText}` : ""}. ` +
         "Check the key or get one at https://www.site-shot.com/pricing/.",
