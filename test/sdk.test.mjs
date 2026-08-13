@@ -405,6 +405,22 @@ test("HTTP 402/429 throw QuotaError", async () => {
   }
 });
 
+test("an upstream `403 Forbidden` capture failure is not blamed on the API key", async () => {
+  // A capture that fails upstream reports the failing HTTP status line verbatim,
+  // so the envelope's `error` reads "403 Forbidden" on an HTTP 200 response. The
+  // word must not be mistaken for a key rejection: the key is valid, and sending
+  // the user off to check it points them at the wrong problem entirely.
+  const fetchImpl = makeFetch(jsonResponse(appErrorEnvelope("403 Forbidden", 403)));
+  const client = new SiteShot("test-key", { fetchImpl });
+  await assert.rejects(client.capture({ url: "https://example.com/" }), (err) => {
+    assert.ok(err instanceof APIError);
+    assert.ok(!(err instanceof AuthError));
+    assert.ok(!err.message.includes("rejected the API key"), err.message);
+    assert.ok(err.message.includes("403 Forbidden"), err.message);
+    return true;
+  });
+});
+
 test("quota-flavoured capture failure throws QuotaError", async () => {
   const fetchImpl = makeFetch(jsonResponse(appErrorEnvelope("monthly quota exceeded", 402)));
   const client = new SiteShot("test-key", { fetchImpl });
