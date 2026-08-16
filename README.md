@@ -188,6 +188,15 @@ error. The `retries` option applies to **connection-level failures only**
 (DNS, connection reset, no bytes received), with jittered backoff.
 `retries: 2` is a sensible setting for `country=` captures.
 
+## Building an agent?
+
+If your agent drives a browser, it can screenshot pages itself — the right tool for pages that must
+be signed into or stepped through a flow. For public URLs, delegating the capture to the API is
+usually better engineering: the same pipeline on every request, country-specific vantage points
+(`country` + `strictCountry`), every frame validated before it is returned, and a fraction of a cent
+per capture instead of a browser session plus vision tokens per look. The full comparison:
+[AI agent vs. screenshot API — who should capture the page](https://www.site-shot.com/blog/ai-agent-vs-screenshot-api/).
+
 ## Requirements
 
 - Node.js >= 18 (built-in `fetch`)
@@ -200,6 +209,7 @@ error. The `retries` option applies to **connection-level failures only**
 - Supported countries: <https://www.site-shot.com/countries/>
 - Time zones: <https://www.site-shot.com/time-zones/>
 - MCP server (agent tooling sibling): `npx -y site-shot-mcp`
+- When an agent should delegate the capture: <https://www.site-shot.com/blog/ai-agent-vs-screenshot-api/>
 
 ## License
 

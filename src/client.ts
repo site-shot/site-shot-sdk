@@ -13,7 +13,7 @@ import {
 
 const DEFAULT_BASE_URL = "https://api.site-shot.com/";
 /** Must match `version` in package.json — pinned by a test in test/sdk.test.mjs. */
-const SDK_VERSION = "0.1.2";
+const SDK_VERSION = "0.1.3";
 /** The API's own default server-side render deadline (`timeout` param), ms. */
 const DEFAULT_SERVER_TIMEOUT_MS = 60_000;
 /** Client-side headroom on top of the server deadline, so the server always answers first. */
