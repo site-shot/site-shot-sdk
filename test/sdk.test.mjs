@@ -139,6 +139,20 @@ test("serializes params verbatim, coerces booleans, keeps unknown passthrough", 
   assert.ok(!params.has("time_zone"));
 });
 
+test("format: \"webp\" is serialized as format=webp in the request URL", async () => {
+  // Runtime pin, not a red/green regression test: `buildParams` has never
+  // filtered by known keys (see "...keeps unknown passthrough" above), so
+  // this already passed before CaptureOptions["format"] listed "webp" - only
+  // `test/types.ts` (tsc) catches that union losing a value. This test exists
+  // so the *wire format* for webp (a plain `format=webp` query param, same
+  // shape as png/jpeg) cannot silently change later.
+  const fetchImpl = makeFetch(jsonResponse({ image: PIXELS_B64 }));
+  const client = new SiteShot("test-key", { fetchImpl });
+  await client.capture({ url: "https://example.com/page", format: "webp" });
+  const params = paramsOf(fetchImpl.calls[0]);
+  assert.equal(params.get("format"), "webp");
+});
+
 test("capture methods always request response_type=json (and callers cannot override it)", async () => {
   const fetchImpl = makeFetch(jsonResponse({ image: PIXELS_B64 }));
   const client = new SiteShot("test-key", { fetchImpl });

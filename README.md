@@ -126,7 +126,7 @@ SDK update.
 | `full_size` | boolean | false | full-page capture (height capped by `max_height`) |
 | `max_height` | int 100–20000 | 20000 | only meaningful with `full_size` |
 | `scaled_width` | int 50–10000 | — | scale result image to width |
-| `format` | `png` \| `jpeg` | png | |
+| `format` | `png` \| `jpeg` \| `webp` | png | `png`/`webp` lossless, `jpeg` lossy; `webp` is typically about 35% smaller than `png`; WebP capped at 16,383 px/side (taller `full_size` captures are cut from the top) |
 | `delay_time` | int ms 0–60000 | 500 | wait before capture (SPAs, animations) |
 | `timeout` | int ms 0–120000 | 60000 | server-side render deadline |
 | `user_agent` | string | — | custom UA for the rendering browser |
@@ -173,9 +173,9 @@ raw response `body` where available.
 | `AuthError` | missing or rejected API key (also thrown early by the constructor on an empty key) |
 | `QuotaError` | plan quota exhausted, payment required, or no active subscription on the account |
 | `CountryUnavailableError` | `strict_country` capture and the requested country has no capacity right now |
-| `InvalidParamsError` | the API rejected a parameter (out-of-range width, bad format, ...) |
+| `InvalidParamsError` | the API rejected a parameter (out-of-range width, ...) |
 | `SiteShotTimeoutError` | client-side abort, or the API reported a render timeout |
-| `APIError` | anything else (server errors, unparseable bodies, connection failures) |
+| `APIError` | anything else (server errors, unparseable bodies, connection failures, an unsupported `format` value) |
 
 Under the hood the SDK always asks the API for a JSON response and decodes the
 image itself — so errors surface as typed exceptions instead of an error
@@ -194,7 +194,7 @@ error. The `retries` option applies to **connection-level failures only**
 If your agent drives a browser, it can screenshot pages itself — the right tool for pages that must
 be signed into or stepped through a flow. For public URLs, delegating the capture to the API is
 usually better engineering: the same pipeline on every request, country-specific vantage points
-(`country` + `strictCountry`), every frame validated before it is returned, and a fraction of a cent
+(`country` + `strict_country`), every frame validated before it is returned, and a fraction of a cent
 per capture instead of a browser session plus vision tokens per look. The full comparison:
 [AI agent vs. screenshot API — who should capture the page](https://www.site-shot.com/blog/ai-agent-vs-screenshot-api/).
 

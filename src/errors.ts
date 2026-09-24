@@ -49,11 +49,15 @@ export class QuotaError extends SiteShotError {}
  */
 export class CountryUnavailableError extends SiteShotError {}
 
-/** The API rejected one of the request parameters (out of range, bad format, ...). */
+/** The API rejected one of the request parameters (out of range, ...). */
 export class InvalidParamsError extends SiteShotError {}
 
 /** Client-side abort, or the API reported that the render timed out. */
 export class SiteShotTimeoutError extends SiteShotError {}
 
-/** Anything else: 5xx responses, unparseable bodies, connection failures. */
+/**
+ * Anything else: 5xx responses, unparseable bodies, connection failures, or
+ * an unsupported `format` value (the API answers that with HTTP 404 in image
+ * mode, or a 200 JSON envelope whose `error` is `422 Unprocessable Entity`).
+ */
 export class APIError extends SiteShotError {}

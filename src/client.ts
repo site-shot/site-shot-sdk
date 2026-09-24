@@ -13,7 +13,7 @@ import {
 
 const DEFAULT_BASE_URL = "https://api.site-shot.com/";
 /** Must match `version` in package.json — pinned by a test in test/sdk.test.mjs. */
-const SDK_VERSION = "0.1.3";
+const SDK_VERSION = "0.2.0";
 /** The API's own default server-side render deadline (`timeout` param), ms. */
 const DEFAULT_SERVER_TIMEOUT_MS = 60_000;
 /** Client-side headroom on top of the server deadline, so the server always answers first. */
@@ -62,8 +62,13 @@ export interface CaptureOptions {
   max_height?: number;
   /** Scale the result image to this width, 50–10000. */
   scaled_width?: number;
-  /** Image format. API default: `png`. */
-  format?: "png" | "jpeg";
+  /**
+   * Image format. API default: `png`. `png` and `webp` are lossless; `webp`
+   * is typically about 35% smaller than `png`. `jpeg` is lossy. WebP is
+   * limited to 16,383 px per side (taller full-page captures are cut from
+   * the top).
+   */
+  format?: "png" | "jpeg" | "webp";
   /** Wait this many ms before capturing, 0–60000. API default: 500. */
   delay_time?: number;
   /** Server-side render deadline in ms, 0–120000. API default: 60000. */
