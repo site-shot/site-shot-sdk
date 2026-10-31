@@ -35,9 +35,11 @@ export class SiteShotError extends Error {
 export class AuthError extends SiteShotError {}
 
 /**
- * Plan quota exhausted, payment required, or the account has no active
- * subscription. Distinct from {@link AuthError}: the API key is valid, the
- * plan behind it is not.
+ * Plan quota exhausted, the free API trial's 100 captures for the month used
+ * up, a `country` other than US on the free API trial (HTTP 403; the refused
+ * request still counts against the month), payment required, or the account
+ * has no active subscription. Distinct from {@link AuthError}: the API key is
+ * valid, the allowance behind it is not.
  */
 export class QuotaError extends SiteShotError {}
 

@@ -10,10 +10,14 @@ Capture website screenshots in a real Chromium browser: full-page capture, count
 proxies, automatic ad & cookie-banner removal. **Zero runtime dependencies**
 (built-in `fetch`), Node.js >= 18, TypeScript types bundled, ESM + CommonJS.
 
-API plans from **$5/mo** (X-Lite, 2,000 screenshots). The
-[free browser tool](https://www.site-shot.com/) is no-signup, but the **API
+The [free browser tool](https://www.site-shot.com/) is no-signup; the **API
 requires a key** — get one at <https://www.site-shot.com/start/>, which walks
-through the key, the install and a first capture in three steps.
+through the key, the install and a first capture in three steps. A confirmed
+account's API key comes with a **free API trial** of 100 captures a month, no
+card needed; accounts confirmed before 2026-10-30 start it with one button on
+`/start/`, and an account that has had a paid plan before does not get it. API
+plans from **$5/mo** (X-Lite, 2,000 screenshots) add volume. Trial captures
+come from the default location or the US; other countries need a paid plan.
 
 ## Quickstart
 
@@ -80,7 +84,8 @@ const url = client.buildUrl({ url: "https://example.com/", width: 1280 });
 Pass `country` as an **ISO 3166-1 alpha-2 code** (e.g. `"DE"`, `"BR"`, `"JP"` —
 the current list is at <https://www.site-shot.com/countries/>). It automatically
 sets a matching IP, language, time zone, and geolocation. Full country names are
-not valid values.
+not valid values. Countries other than the US need a paid plan; free API trial
+captures come from the default location or the US.
 
 By default, if the requested country has no capacity at that moment, the API
 silently falls back to a US vantage point. Set `strict_country` to fail fast
@@ -171,7 +176,7 @@ raw response `body` where available.
 | Error | Thrown when |
 |---|---|
 | `AuthError` | missing or rejected API key (also thrown early by the constructor on an empty key) |
-| `QuotaError` | plan quota exhausted, payment required, or no active subscription on the account |
+| `QuotaError` | plan quota exhausted, the free API trial's 100 captures for the month used up, a `country` other than US on the free API trial (HTTP 403; the refused request still counts against the month), payment required, or no active subscription on the account |
 | `CountryUnavailableError` | `strict_country` capture and the requested country has no capacity right now |
 | `InvalidParamsError` | the API rejected a parameter (out-of-range width, ...) |
 | `SiteShotTimeoutError` | client-side abort, or the API reported a render timeout |

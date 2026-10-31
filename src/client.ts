@@ -209,9 +209,9 @@ function classifyError(status: number, errorText: string | undefined, body: unkn
     );
   }
   // 403 is a *billing* state, not a key problem: the API returns it when the
-  // account has no active subscription, and a bad or missing key is always a
-  // 401. Classifying it as AuthError would send users to check a key that is
-  // perfectly valid.
+  // account has no active subscription or has used up the month's free API
+  // trial captures, and a bad or missing key is always a 401. Classifying it
+  // as AuthError would send users to check a key that is perfectly valid.
   if (status === 402 || status === 403 || status === 429 || /quota|limit exceed|payment|credit|subscription/.test(lower)) {
     return new QuotaError(
       `Site-Shot quota or payment issue${errorText ? `: ${errorText}` : ` (HTTP ${status})`}.`,
