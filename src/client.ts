@@ -13,7 +13,7 @@ import {
 
 const DEFAULT_BASE_URL = "https://api.site-shot.com/";
 /** Must match `version` in package.json — pinned by a test in test/sdk.test.mjs. */
-const SDK_VERSION = "0.2.0";
+const SDK_VERSION = "0.2.1";
 /** The API's own default server-side render deadline (`timeout` param), ms. */
 const DEFAULT_SERVER_TIMEOUT_MS = 60_000;
 /** Client-side headroom on top of the server deadline, so the server always answers first. */
@@ -182,6 +182,16 @@ function isAbortError(err: unknown): boolean {
   );
 }
 
+/**
+ * The free plan's refusals, matched by their fixed opening words only (the
+ * rest of each sentence may change). The API may word the used-up month either
+ * "Free plan used up: ..." or "Free API trial used up: ...". The country
+ * refusal does not arrive on a fixed status: in JSON mode, which the SDK
+ * always uses, it is an HTTP 200 envelope whose `error` carries the text and
+ * no image. So these are matched on any status.
+ */
+const FREE_PLAN_REFUSAL = /free plan used up|free api trial used up|geotargeting needs a paid plan/;
+
 function classifyError(status: number, errorText: string | undefined, body: unknown): SiteShotError {
   const opts = { httpStatus: status, body };
   const lower = (errorText ?? "").toLowerCase();
@@ -192,6 +202,12 @@ function classifyError(status: number, errorText: string | undefined, body: unkn
         "Retry later, or drop strict_country to allow the default US fallback.",
       opts,
     );
+  }
+  // Checked before the key patterns below: the free plan's texts are about the
+  // allowance, and their wording past the fixed prefix may well mention "API
+  // keys", which must not send the user off to check a key that is valid.
+  if (FREE_PLAN_REFUSAL.test(lower)) {
+    return new QuotaError(`Site-Shot free plan limit: ${errorText}`, opts);
   }
   // 401 is the only status that means "the key itself was rejected": it is what
   // the API returns for a missing or unknown `userkey`.
@@ -209,9 +225,9 @@ function classifyError(status: number, errorText: string | undefined, body: unkn
     );
   }
   // 403 is a *billing* state, not a key problem: the API returns it when the
-  // account has no active subscription or has used up the month's free API
-  // trial captures, and a bad or missing key is always a 401. Classifying it
-  // as AuthError would send users to check a key that is perfectly valid.
+  // account has no active subscription or has used up the month's free-plan
+  // captures; a bad or missing key is always a 401. Classifying it as
+  // AuthError would send users to check a key that is perfectly valid.
   if (status === 402 || status === 403 || status === 429 || /quota|limit exceed|payment|credit|subscription/.test(lower)) {
     return new QuotaError(
       `Site-Shot quota or payment issue${errorText ? `: ${errorText}` : ` (HTTP ${status})`}.`,

@@ -388,6 +388,99 @@ test("real 403 envelope (no active subscription) throws QuotaError, not AuthErro
   });
 });
 
+test("free-plan 403 refusals throw QuotaError, under either used-up wording", async () => {
+  // A free plan used up for the month is a real HTTP 403 (Kong, every mode)
+  // with {"message": text}. The API may word it "Free plan used up: ..." or
+  // "Free API trial used up: ...", so both must classify the same way: as a
+  // billing state, never as a key problem, with the API's own words kept in
+  // the error message. In image mode the country refusal is a 403 too. The
+  // texts past their fixed prefixes are examples.
+  const texts = [
+    "Free plan used up: 100 captures this month. It renews on 2026-11-01 (UTC). " +
+      "For more, choose a paid plan: https://www.site-shot.com/pricing/",
+    "Free API trial used up: 100 captures this month. It renews on 2026-11-01 (UTC).",
+    "Geotargeting needs a paid plan: the free plan captures from the " +
+      "default location or the US. Plans: https://www.site-shot.com/pricing/",
+  ];
+  for (const text of texts) {
+    for (const body of [{ message: text }, { error: text }]) {
+      const fetchImpl = makeFetch(jsonResponse(body, 403));
+      const client = new SiteShot("test-key", { fetchImpl });
+      await assert.rejects(client.capture({ url: "https://example.com/" }), (err) => {
+        assert.ok(err instanceof QuotaError, `${Object.keys(body)[0]}: ${text}`);
+        assert.ok(!(err instanceof AuthError));
+        assert.equal(err.httpStatus, 403);
+        assert.ok(err.message.includes(text), err.message);
+        assert.ok(!err.message.includes("rejected the API key"), err.message);
+        return true;
+      });
+    }
+  }
+});
+
+test("free-plan refusals on an HTTP 200 JSON envelope throw QuotaError, matched by text", async () => {
+  // In JSON mode -- what the SDK always requests -- the free plan's country
+  // refusal is NOT a 403: it is HTTP 200 with {"error": text} and no image,
+  // and the refused request still counts toward the month's 100. Only the
+  // text says what happened, so the SDK must match the free plan's fixed
+  // prefixes on any status. The used-up texts are pinned on 200 as well,
+  // worded without "paid plan" or "subscription", so only the prefix match
+  // can classify them. Case must not matter.
+  const texts = [
+    "Geotargeting needs a paid plan: the free plan captures from the default " +
+      "location or the US. Plans: https://www.site-shot.com/pricing/",
+    // the rest of the sentence may change, and may well mention API keys
+    "Geotargeting needs a paid plan: free-plan API keys capture from the US.",
+    "Free plan used up: 100 captures this month. It renews on 2026-11-30 (UTC).",
+    "Free API trial used up: 100 captures this month. It renews on 2026-11-30 (UTC).",
+    "FREE PLAN USED UP: 100 captures this month.",
+  ];
+  for (const text of texts) {
+    const body = { error: text };
+    const fetchImpl = makeFetch(() => jsonResponse(body, 200));
+    const client = new SiteShot("test-key", { fetchImpl });
+    for (const call of [
+      () => client.capture({ url: "https://example.com/", country: "DE" }),
+      () => client.captureJson({ url: "https://example.com/", country: "DE" }),
+    ]) {
+      await assert.rejects(call(), (err) => {
+        assert.ok(err instanceof QuotaError, `${text} -> ${err.constructor.name}: ${err.message}`);
+        assert.ok(!(err instanceof AuthError));
+        assert.equal(err.httpStatus, 200);
+        assert.deepEqual(err.body, body);
+        assert.ok(err.message.includes(text), err.message);
+        assert.ok(!err.message.includes("rejected the API key"), err.message);
+        return true;
+      });
+    }
+  }
+});
+
+test("the free-plan text match does not swallow key or blocked-target failures", async () => {
+  // Invalid keys stay AuthError, and a capture refused for its target (private
+  // address, blocked site) stays a non-quota error, on a 200 and on a 401.
+  const cases = [
+    { status: 401, body: { message: "Invalid authentication credentials" }, expected: AuthError },
+    { status: 401, body: { message: "No API key found in request" }, expected: AuthError },
+    { status: 200, body: { error: "Invalid userkey" }, expected: AuthError },
+    {
+      status: 200,
+      body: appErrorEnvelope("URL resolves to a private or reserved address", 403),
+      expected: APIError,
+    },
+    { status: 200, body: appErrorEnvelope("This site is blocked", 403), expected: APIError },
+  ];
+  for (const { status, body, expected } of cases) {
+    const fetchImpl = makeFetch(jsonResponse(body, status));
+    const client = new SiteShot("test-key", { fetchImpl });
+    await assert.rejects(client.capture({ url: "https://example.com/" }), (err) => {
+      assert.ok(err instanceof expected, `${JSON.stringify(body)} -> ${err.constructor.name}`);
+      assert.ok(!(err instanceof QuotaError), err.message);
+      return true;
+    });
+  }
+});
+
 test("a `message` key on a successful 2xx capture is metadata, not an error", async () => {
   // `message` only signals failure on a non-2xx rejection, so it must never
   // turn a successful capture into a throw.
