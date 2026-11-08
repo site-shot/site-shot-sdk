@@ -133,6 +133,11 @@ export interface CaptureOptions {
    */
   webgl?: boolean | 0 | 1;
   /**
+   * Start the capture in a clean browser: no cookies or local storage from an
+   * earlier capture, and nothing from this one kept. API default: 0.
+   */
+  fresh_session?: boolean | 0 | 1;
+  /**
    * Unknown options pass through to the API verbatim. API parameter names are
    * lowercase snake_case: a camelCase name (`fullSize`) is refused with
    * {@link InvalidParamsError} before anything is sent.
@@ -162,6 +167,13 @@ export interface CaptureResult {
 }
 
 /** File extensions `captureToFile` maps to a `format`. */
+// error_code values that mean the page itself could not be reached.
+const PAGE_LOAD_CODES = new Set([
+  "proxy_navigation_failed",
+  "dns_lookup_failed",
+  "connection_refused_by_host",
+]);
+
 const FORMAT_BY_EXTENSION: Record<string, "png" | "jpeg" | "webp"> = {
   ".png": "png",
   ".jpg": "jpeg",
@@ -270,14 +282,24 @@ function classifyError(status: number, errorText: string | undefined, body: unkn
   // The machine-readable code wins over the text: an unresolvable or
   // unreachable host comes back with the text "504 Gateway Timeout", which is
   // neither a timeout of the render nor the page's own answer.
-  if (lowerCode.startsWith("proxy_")) {
+  if (lowerCode === "proxy_auth_failed") {
+    return new APIError(
+      `Site-Shot could not use your proxy: proxy authentication failed (${code}` +
+        `${errorText ? `; the API reported "${errorText}"` : ""}). ` +
+        "Check http_proxy, proxy_username and proxy_password.",
+      opts,
+    );
+  }
+  if (PAGE_LOAD_CODES.has(lowerCode)) {
     return new PageLoadError(
       `Site-Shot could not open the page: its host did not resolve or did not answer (${code}` +
         `${errorText ? `; the API reported "${errorText}"` : ""}). Check the URL.`,
       opts,
     );
   }
-  if (lowerCode === "screenshot_capture_timeout") {
+  // page_load_timeout, selector_timeout, screenshot_capture_timeout. Their
+  // text is often "504 Gateway Timeout", which alone does not mean a timeout.
+  if (lowerCode.endsWith("_timeout") && !lowerCode.startsWith("proxy_")) {
     return new SiteShotTimeoutError(
       `Site-Shot render timed out${errorText ? `: ${errorText}` : ""} (${code}).`,
       opts,
@@ -419,7 +441,11 @@ export class SiteShot {
     const fromExtension = FORMAT_BY_EXTENSION[extname(filePath).toLowerCase()];
     if (options.format === undefined && fromExtension) {
       options = { ...options, format: fromExtension };
-    } else if (fromExtension && String(options.format).toLowerCase() !== fromExtension) {
+    } else if (
+      fromExtension &&
+      // The API accepts "jpg" as an alias of "jpeg".
+      String(options.format).toLowerCase().replace(/^jpg$/, "jpeg") !== fromExtension
+    ) {
       throw new InvalidParamsError(
         `format "${String(options.format)}" does not match the file extension of "${filePath}". ` +
           "Drop format to follow the extension, or rename the file.",
@@ -537,7 +563,7 @@ export class SiteShot {
       // The API ignores names it does not know, so a camelCase `fullSize`
       // would silently give a viewport-only capture. Its names are snake_case.
       if (/[A-Z]/.test(key) && value !== undefined) {
-        const snake = key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+        const snake = key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`).replace(/^_/, "");
         throw new InvalidParamsError(
           `Unknown option "${key}": Site-Shot options are snake_case (did you mean "${snake}"?).`,
         );

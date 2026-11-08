@@ -869,6 +869,67 @@ test("captureToFile refuses a format that contradicts the extension, before send
   assert.equal(fetchImpl.calls.length, 0);
 });
 
+test("dns_lookup_failed and connection_refused_by_host are PageLoadErrors", async () => {
+  for (const code of ["dns_lookup_failed", "connection_refused_by_host"]) {
+    const body = { ...appErrorEnvelope("502 Bad Gateway", "502"), error_code: code };
+    const client = new SiteShot("test-key", { fetchImpl: makeFetch(jsonResponse(body)) });
+    await assert.rejects(client.capture({ url: "https://example.com/" }), (err) => {
+      assert.ok(err instanceof PageLoadError, `${code}: ${err.constructor.name}: ${err.message}`);
+      assert.equal(err.code, code);
+      return true;
+    });
+  }
+});
+
+test("proxy_auth_failed points at the proxy credentials, not the URL", async () => {
+  const body = { ...appErrorEnvelope("504 Gateway Timeout", "504"), error_code: "proxy_auth_failed" };
+  const client = new SiteShot("test-key", { fetchImpl: makeFetch(jsonResponse(body)) });
+  await assert.rejects(
+    client.capture({ url: "https://example.com/", http_proxy: "http://proxy.example:8080" }),
+    (err) => {
+      assert.ok(err instanceof APIError);
+      assert.ok(!(err instanceof PageLoadError), err.constructor.name);
+      assert.ok(!(err instanceof SiteShotTimeoutError), err.constructor.name);
+      assert.ok(err.message.includes("proxy_password"), err.message);
+      assert.ok(!err.message.includes("Check the URL"), err.message);
+      return true;
+    },
+  );
+});
+
+test("page_load_timeout and selector_timeout are timeouts even with a 504 status text", async () => {
+  for (const code of ["page_load_timeout", "selector_timeout"]) {
+    const body = { ...appErrorEnvelope("504 Gateway Timeout", "504"), error_code: code };
+    const client = new SiteShot("test-key", { fetchImpl: makeFetch(jsonResponse(body)) });
+    await assert.rejects(client.capture({ url: "https://example.com/" }), (err) => {
+      assert.ok(err instanceof SiteShotTimeoutError, `${code}: ${err.constructor.name}: ${err.message}`);
+      assert.equal(err.code, code);
+      return true;
+    });
+  }
+});
+
+test("captureToFile accepts the API's jpg alias for a .jpg file", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "site-shot-sdk-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const fetchImpl = makeFetch(jsonResponse({ image: PIXELS_B64 }));
+  const client = new SiteShot("test-key", { fetchImpl });
+  await client.captureToFile({ url: "https://example.com/", format: "jpg" }, join(dir, "shot.jpg"));
+  assert.equal(fetchImpl.calls.length, 1);
+});
+
+test("the snake_case hint for a leading capital has no leading underscore", () => {
+  const client = new SiteShot("test-key", { fetchImpl: makeFetch(jsonResponse({ image: PIXELS_B64 })) });
+  assert.throws(
+    () => client.buildUrl({ url: "https://example.com/", Width: 800 }),
+    (err) => {
+      assert.ok(err instanceof InvalidParamsError);
+      assert.ok(err.message.includes('"width"'), err.message);
+      return true;
+    },
+  );
+});
+
 test("country_unavailable points at the country list and says retries do not re-run it", async () => {
   const fetchImpl = makeFetch(jsonResponse(appErrorEnvelope("country_unavailable", 503)));
   const client = new SiteShot("test-key", { fetchImpl, retries: 2 });

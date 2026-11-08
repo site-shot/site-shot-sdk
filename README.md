@@ -159,6 +159,7 @@ example `width: 50` gives a 100 px wide image); `screenshot_parameters` in the
 | `language` | string | from `country` / en | Accept-Language |
 | `time_zone` | IANA name | America/New_York | see <https://www.site-shot.com/time-zones/> |
 | `webgl` | boolean | false | give the page a working (software) WebGL context; detectable by bot protection, so only when the page needs it |
+| `fresh_session` | boolean \| 0 \| 1 | 0 | start in a clean browser: no cookies or local storage from an earlier capture, and nothing from this one kept |
 
 `userkey` (your API key) is owned by the `SiteShot` constructor — never a
 per-call option. `response_type` is owned by the return-mode methods.
@@ -196,8 +197,8 @@ reported) and the raw response `body`.
 | `ConcurrencyLimitError` | HTTP 429: more parallel captures than the plan allows (the free plan: one at a time). A subclass of `QuotaError`; the refused request does not count |
 | `CountryUnavailableError` | `strict_country` capture and the requested country has no capacity right now, or is not offered |
 | `InvalidParamsError` | a camelCase option name, a `captureToFile` extension that contradicts `format`, or a parameter the API rejected (out-of-range numbers are clamped, not rejected) |
-| `SiteShotTimeoutError` | client-side abort, or the API reported a render timeout |
-| `PageLoadError` | the page could not be opened: its host did not resolve or did not answer. A subclass of `APIError` |
+| `SiteShotTimeoutError` | client-side abort, or the API reported a timeout (`page_load_timeout`, `selector_timeout`, `screenshot_capture_timeout`) |
+| `PageLoadError` | the page could not be opened: its host did not resolve or did not answer (`proxy_navigation_failed`, `dns_lookup_failed`, `connection_refused_by_host`). A subclass of `APIError`. A failed login to your own `http_proxy` (`proxy_auth_failed`) is a plain `APIError` |
 | `APIError` | anything else (the target page answered an error such as 403 Forbidden, server errors, unparseable bodies, connection failures, an unsupported `format` value) |
 
 Under the hood the SDK always asks the API for a JSON response and decodes the

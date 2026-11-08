@@ -5,9 +5,12 @@ All notable changes to `site-shot-sdk`. Dates are npm publish dates (UTC).
 ## Unreleased
 
 - Capture failures are classified by the API's `error_code` first. A page whose
-  host does not resolve or does not answer (`proxy_*` codes) is now a
+  host does not resolve or does not answer (`proxy_navigation_failed`,
+  `dns_lookup_failed`, `connection_refused_by_host`) is now a
   `PageLoadError` (a subclass of `APIError`) instead of a `SiteShotTimeoutError`;
-  "504 Gateway Timeout" on its own no longer reads as a render timeout. A target
+  "504 Gateway Timeout" on its own no longer reads as a render timeout; the
+  `*_timeout` codes still raise `SiteShotTimeoutError`, and `proxy_auth_failed`
+  points at the proxy credentials. A target
   page's own error (e.g. "403 Forbidden") says the target page answered it.
 - `SiteShotError` carries `code` (the API's `error_code`) and `targetStatus`
   (`response.status_code`) next to `httpStatus`.

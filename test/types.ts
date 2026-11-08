@@ -30,3 +30,5 @@ function readResult(result: CaptureResult): [string | number | undefined, string
 void readResult;
 const webglOptions: CaptureOptions = { url: "https://example.com/", webgl: true };
 void webglOptions;
+const freshOptions: CaptureOptions = { url: "https://example.com/", fresh_session: true };
+void freshOptions;
