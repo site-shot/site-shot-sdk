@@ -3,8 +3,10 @@ export type { CaptureOptions, CaptureResult, SiteShotOptions } from "./client";
 export {
   APIError,
   AuthError,
+  ConcurrencyLimitError,
   CountryUnavailableError,
   InvalidParamsError,
+  PageLoadError,
   QuotaError,
   SiteShotError,
   SiteShotTimeoutError,

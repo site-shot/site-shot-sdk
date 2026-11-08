@@ -4,8 +4,10 @@ import { writeFile } from "node:fs/promises";
 import {
   APIError,
   AuthError,
+  ConcurrencyLimitError,
   CountryUnavailableError,
   InvalidParamsError,
+  PageLoadError,
   QuotaError,
   SiteShotError,
   SiteShotTimeoutError,
@@ -192,9 +194,24 @@ function isAbortError(err: unknown): boolean {
  */
 const FREE_PLAN_REFUSAL = /free plan used up|free api trial used up|geotargeting needs a paid plan/;
 
+/** Where to send a user for a key or for captures: the one starting point. */
+const START_URL = "https://www.site-shot.com/start/";
+
+/** `error_code` and `response.status_code` of a JSON envelope, when present. */
+function envelopeDetails(body: unknown): { code?: string; targetStatus?: number } {
+  if (!body || typeof body !== "object") return {};
+  const envelope = body as Record<string, unknown>;
+  const code = asErrorText(envelope.error_code);
+  const response = envelope.response as Record<string, unknown> | undefined;
+  const raw = response && typeof response === "object" ? Number(response.status_code) : NaN;
+  return { code, targetStatus: Number.isInteger(raw) && raw > 0 ? raw : undefined };
+}
+
 function classifyError(status: number, errorText: string | undefined, body: unknown): SiteShotError {
-  const opts = { httpStatus: status, body };
+  const { code, targetStatus } = envelopeDetails(body);
+  const opts = { httpStatus: status, body, code, targetStatus };
   const lower = (errorText ?? "").toLowerCase();
+  const lowerCode = (code ?? "").toLowerCase();
 
   if (lower === "country_unavailable") {
     return new CountryUnavailableError(
@@ -209,6 +226,31 @@ function classifyError(status: number, errorText: string | undefined, body: unkn
   if (FREE_PLAN_REFUSAL.test(lower)) {
     return new QuotaError(`Site-Shot free plan limit: ${errorText}`, opts);
   }
+  // The machine-readable code wins over the text: an unresolvable or
+  // unreachable host comes back with the text "504 Gateway Timeout", which is
+  // neither a timeout of the render nor the page's own answer.
+  if (lowerCode.startsWith("proxy_")) {
+    return new PageLoadError(
+      `Site-Shot could not open the page: its host did not resolve or did not answer (${code}` +
+        `${errorText ? `; the API reported "${errorText}"` : ""}). Check the URL.`,
+      opts,
+    );
+  }
+  if (lowerCode === "screenshot_capture_timeout") {
+    return new SiteShotTimeoutError(
+      `Site-Shot render timed out${errorText ? `: ${errorText}` : ""} (${code}).`,
+      opts,
+    );
+  }
+  // 429 is the plan's parallel-request limit (the free plan allows one capture
+  // at a time). It is refused before the capture starts, so it is not counted.
+  if (status === 429) {
+    return new ConcurrencyLimitError(
+      `Site-Shot parallel-request limit${errorText ? `: ${errorText}` : " (HTTP 429)"}. ` +
+        "Run captures one after another or cap your concurrency; the refused request was not counted.",
+      opts,
+    );
+  }
   // 401 is the only status that means "the key itself was rejected": it is what
   // the API returns for a missing or unknown `userkey`.
   //
@@ -220,7 +262,7 @@ function classifyError(status: number, errorText: string | undefined, body: unkn
   if (/userkey|api.?key|invalid key|unauthoriz|authenticat/.test(lower) || status === 401) {
     return new AuthError(
       `Site-Shot rejected the API key${errorText ? `: ${errorText}` : ""}. ` +
-        "Check the key or get one at https://www.site-shot.com/pricing/.",
+        `Check the key, or get one at ${START_URL}`,
       opts,
     );
   }
@@ -228,9 +270,14 @@ function classifyError(status: number, errorText: string | undefined, body: unkn
   // account has no active subscription or has used up the month's free-plan
   // captures; a bad or missing key is always a 401. Classifying it as
   // AuthError would send users to check a key that is perfectly valid.
-  if (status === 402 || status === 403 || status === 429 || /quota|limit exceed|payment|credit|subscription/.test(lower)) {
+  if (status === 402 || status === 403 || /quota|limit exceed|payment|credit|subscription/.test(lower)) {
+    // An account without an entitling plan meets "No active subscription
+    // found"; many such accounts can switch on the free plan with one button.
+    const nextStep = /no active subscription/.test(lower)
+      ? ` Switch on the free plan (100 captures a month) if the account qualifies, or choose a plan, at ${START_URL}`
+      : "";
     return new QuotaError(
-      `Site-Shot quota or payment issue${errorText ? `: ${errorText}` : ` (HTTP ${status})`}.`,
+      `Site-Shot quota or payment issue${errorText ? `: ${errorText}` : ` (HTTP ${status})`}.${nextStep}`,
       opts,
     );
   }
@@ -240,8 +287,19 @@ function classifyError(status: number, errorText: string | undefined, body: unkn
       opts,
     );
   }
-  if (/time.?out|timed out/.test(lower)) {
+  // "Gateway Timeout" is an HTTP status line, not a report that the render ran
+  // out of time, so it does not make a timeout on its own.
+  if (/time.?out|timed out/.test(lower.replace(/gateway time.?out/g, ""))) {
     return new SiteShotTimeoutError(`Site-Shot render timed out: ${errorText}`, opts);
+  }
+  // A capture that failed on the page's own answer reports that HTTP status
+  // line ("403 Forbidden") on an HTTP 200 envelope: the target refused it.
+  const statusLine = /^(4\d\d)\b/.exec(errorText ?? "");
+  if (status < 300 && statusLine && statusLine[1] !== "422") {
+    return new APIError(
+      `Site-Shot could not capture the page: the target page answered ${errorText}.`,
+      opts,
+    );
   }
   return new APIError(
     `Site-Shot API error${errorText ? `: ${errorText}` : ""} (HTTP ${status}).`,
@@ -253,7 +311,7 @@ function classifyError(status: number, errorText: string | undefined, body: unkn
  * Site-Shot API client.
  *
  * ```js
- * const client = new SiteShot("YOUR_API_KEY"); // or set SITESHOT_API_KEY
+ * const client = new SiteShot("YOUR_API_KEY"); // or new SiteShot() to read SITESHOT_API_KEY
  * const png = await client.capture({ url: "example.com", full_size: true });
  * ```
  */
@@ -269,7 +327,13 @@ export class SiteShot {
     if (!key || !String(key).trim()) {
       throw new AuthError(
         "Missing Site-Shot API key. Pass it to new SiteShot(apiKey) or set the " +
-          "SITESHOT_API_KEY environment variable. Get a key at https://www.site-shot.com/pricing/.",
+          `SITESHOT_API_KEY environment variable. Get a key at ${START_URL}`,
+      );
+    }
+    if (String(key).trim() === "YOUR_API_KEY") {
+      throw new AuthError(
+        'The API key is still the "YOUR_API_KEY" placeholder. Pass your real key, or call ' +
+          `new SiteShot() with no key to read SITESHOT_API_KEY. Get a key at ${START_URL}`,
       );
     }
     this.apiKey = String(key).trim();

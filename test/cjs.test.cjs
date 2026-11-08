@@ -12,6 +12,8 @@ const {
   InvalidParamsError,
   SiteShotTimeoutError,
   APIError,
+  PageLoadError,
+  ConcurrencyLimitError,
 } = require("../dist/index.cjs");
 
 test("CJS entry point exposes the full public surface", () => {
@@ -24,6 +26,8 @@ test("CJS entry point exposes the full public surface", () => {
     InvalidParamsError,
     SiteShotTimeoutError,
     APIError,
+    PageLoadError,
+    ConcurrencyLimitError,
   ]) {
     assert.equal(typeof exported, "function");
   }

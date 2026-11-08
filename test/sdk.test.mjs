@@ -13,6 +13,8 @@ import {
   InvalidParamsError,
   SiteShotTimeoutError,
   APIError,
+  PageLoadError,
+  ConcurrencyLimitError,
 } from "../dist/index.js";
 
 const PIXELS = Buffer.from("not-really-a-png-but-bytes-are-bytes");
@@ -683,4 +685,132 @@ test("API-level errors (HTTP error status) are never retried", async () => {
   const client = new SiteShot("test-key", { fetchImpl, retries: 3 });
   await assert.rejects(client.capture({ url: "https://example.com/" }), APIError);
   assert.equal(fetchImpl.calls.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Classification by error_code and the target's status
+// ---------------------------------------------------------------------------
+
+test("an unloadable page (proxy_navigation_failed) is a PageLoadError, not a timeout", async () => {
+  // live 2026-11-08: https://nonexistent-host.invalid/ answered HTTP 200 with
+  // error "504 Gateway Timeout", error_code proxy_navigation_failed and
+  // response.status_code "504".
+  const body = { ...appErrorEnvelope("504 Gateway Timeout", "504"), error_code: "proxy_navigation_failed" };
+  const fetchImpl = makeFetch(jsonResponse(body));
+  const client = new SiteShot("test-key", { fetchImpl });
+  await assert.rejects(client.capture({ url: "https://nonexistent-host.invalid/" }), (err) => {
+    assert.ok(err instanceof PageLoadError, `${err.constructor.name}: ${err.message}`);
+    assert.ok(err instanceof APIError);
+    assert.ok(!(err instanceof SiteShotTimeoutError));
+    assert.equal(err.code, "proxy_navigation_failed");
+    assert.equal(err.targetStatus, 504);
+    assert.equal(err.httpStatus, 200);
+    assert.ok(err.message.includes("could not open the page"), err.message);
+    assert.ok(!err.message.includes("timed out"), err.message);
+    return true;
+  });
+});
+
+test("a bare 504 Gateway Timeout status line is not reported as a render timeout", async () => {
+  const fetchImpl = makeFetch(jsonResponse(appErrorEnvelope("504 Gateway Timeout", 504)));
+  const client = new SiteShot("test-key", { fetchImpl });
+  await assert.rejects(client.capture({ url: "https://example.com/" }), (err) => {
+    assert.ok(!(err instanceof SiteShotTimeoutError), err.message);
+    assert.ok(err instanceof APIError);
+    assert.equal(err.targetStatus, 504);
+    return true;
+  });
+});
+
+test("screenshot_capture_timeout and literal timeouts stay SiteShotTimeoutError", async () => {
+  for (const body of [
+    { ...appErrorEnvelope("504 Gateway Timeout", 504), error_code: "screenshot_capture_timeout" },
+    appErrorEnvelope("Render timed out", 504),
+  ]) {
+    const fetchImpl = makeFetch(jsonResponse(body));
+    const client = new SiteShot("test-key", { fetchImpl });
+    await assert.rejects(client.capture({ url: "https://example.com/" }), SiteShotTimeoutError);
+  }
+});
+
+test("a target-page 403 says the target answered it, and carries targetStatus", async () => {
+  const fetchImpl = makeFetch(jsonResponse(appErrorEnvelope("403 Forbidden", "403")));
+  const client = new SiteShot("test-key", { fetchImpl });
+  await assert.rejects(client.capture({ url: "https://example.com/" }), (err) => {
+    assert.ok(err instanceof APIError);
+    assert.ok(err.message.includes("the target page answered 403 Forbidden"), err.message);
+    assert.ok(!err.message.includes("Site-Shot API error"), err.message);
+    assert.equal(err.targetStatus, 403);
+    return true;
+  });
+});
+
+test("HTTP 429 (parallel-request limit) is a ConcurrencyLimitError that says what to do", async () => {
+  // ss-plugin's text; the free plan allows one capture at a time.
+  const body = {
+    message: "API dedicated workers limit exceeded. Allowed number of parallel requests is 1",
+  };
+  const fetchImpl = makeFetch(jsonResponse(body, 429));
+  const client = new SiteShot("test-key", { fetchImpl });
+  await assert.rejects(client.capture({ url: "https://example.com/" }), (err) => {
+    assert.ok(err instanceof ConcurrencyLimitError, `${err.constructor.name}: ${err.message}`);
+    assert.ok(err instanceof QuotaError, "kept a QuotaError for existing instanceof checks");
+    assert.equal(err.httpStatus, 429);
+    assert.ok(err.message.includes(body.message), err.message);
+    assert.ok(/one after another|concurrency/.test(err.message), err.message);
+    assert.ok(!err.message.includes("quota or payment"), err.message);
+    return true;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Where errors send the user
+// ---------------------------------------------------------------------------
+
+test("key errors send the user to /start/, not /pricing/", async (t) => {
+  const saved = process.env.SITESHOT_API_KEY;
+  delete process.env.SITESHOT_API_KEY;
+  t.after(() => {
+    if (saved !== undefined) process.env.SITESHOT_API_KEY = saved;
+  });
+  assert.throws(() => new SiteShot(), (err) => {
+    assert.ok(err.message.includes("https://www.site-shot.com/start/"), err.message);
+    assert.ok(!err.message.includes("/pricing/"), err.message);
+    return true;
+  });
+  const fetchImpl = makeFetch(jsonResponse({ message: "Invalid authentication credentials" }, 401));
+  const client = new SiteShot("test-key", { fetchImpl });
+  await assert.rejects(client.capture({ url: "https://example.com/" }), (err) => {
+    assert.ok(err instanceof AuthError);
+    assert.ok(err.message.includes("https://www.site-shot.com/start/"), err.message);
+    assert.ok(!err.message.includes("/pricing/"), err.message);
+    return true;
+  });
+});
+
+test("403 No active subscription found names the next step on /start/", async () => {
+  const fetchImpl = makeFetch(jsonResponse({ message: "No active subscription found" }, 403));
+  const client = new SiteShot("test-key", { fetchImpl });
+  await assert.rejects(client.capture({ url: "https://example.com/" }), (err) => {
+    assert.ok(err instanceof QuotaError);
+    assert.ok(err.message.includes("free plan"), err.message);
+    assert.ok(err.message.includes("https://www.site-shot.com/start/"), err.message);
+    return true;
+  });
+});
+
+test("the YOUR_API_KEY placeholder is refused before any request", async (t) => {
+  const saved = process.env.SITESHOT_API_KEY;
+  process.env.SITESHOT_API_KEY = "env-key";
+  t.after(() => {
+    if (saved !== undefined) process.env.SITESHOT_API_KEY = saved;
+    else delete process.env.SITESHOT_API_KEY;
+  });
+  const fetchImpl = makeFetch(jsonResponse({ image: PIXELS_B64 }));
+  assert.throws(() => new SiteShot("YOUR_API_KEY", { fetchImpl }), (err) => {
+    assert.ok(err instanceof AuthError);
+    assert.ok(err.message.includes("placeholder"), err.message);
+    return true;
+  });
+  assert.equal(fetchImpl.calls.length, 0);
 });
