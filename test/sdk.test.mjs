@@ -814,3 +814,85 @@ test("the YOUR_API_KEY placeholder is refused before any request", async (t) => 
   });
   assert.equal(fetchImpl.calls.length, 0);
 });
+
+// ---------------------------------------------------------------------------
+// Options that would silently give the wrong capture
+// ---------------------------------------------------------------------------
+
+test("a camelCase option is refused before sending, naming the snake_case one", async () => {
+  const fetchImpl = makeFetch(jsonResponse({ image: PIXELS_B64 }));
+  const client = new SiteShot("test-key", { fetchImpl });
+  await assert.rejects(client.capture({ url: "https://example.com/", fullSize: true }), (err) => {
+    assert.ok(err instanceof InvalidParamsError);
+    assert.ok(err.message.includes('"full_size"'), err.message);
+    return true;
+  });
+  assert.throws(() => client.buildUrl({ url: "https://example.com/", noAds: true }), InvalidParamsError);
+  assert.equal(fetchImpl.calls.length, 0);
+  // snake_case unknown options still pass through verbatim
+  await client.capture({ url: "https://example.com/", webgl: true, future_param: "x" });
+  assert.equal(paramsOf(fetchImpl.calls[0]).get("webgl"), "1");
+  assert.equal(paramsOf(fetchImpl.calls[0]).get("future_param"), "x");
+});
+
+test("captureToFile takes the format from the file extension when none is given", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "site-shot-sdk-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const cases = [
+    ["shot.jpg", "jpeg"],
+    ["shot.JPEG", "jpeg"],
+    ["shot.webp", "webp"],
+    ["shot.png", "png"],
+  ];
+  for (const [name, format] of cases) {
+    const fetchImpl = makeFetch(jsonResponse({ image: PIXELS_B64 }));
+    const client = new SiteShot("test-key", { fetchImpl });
+    await client.captureToFile({ url: "https://example.com/" }, join(dir, name));
+    assert.equal(paramsOf(fetchImpl.calls[0]).get("format"), format, name);
+  }
+  // an extension it does not know leaves the API default alone
+  const fetchImpl = makeFetch(jsonResponse({ image: PIXELS_B64 }));
+  const client = new SiteShot("test-key", { fetchImpl });
+  await client.captureToFile({ url: "https://example.com/" }, join(dir, "shot.bin"));
+  assert.equal(paramsOf(fetchImpl.calls[0]).get("format"), null);
+});
+
+test("captureToFile refuses a format that contradicts the extension, before sending", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "site-shot-sdk-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const fetchImpl = makeFetch(jsonResponse({ image: PIXELS_B64 }));
+  const client = new SiteShot("test-key", { fetchImpl });
+  await assert.rejects(
+    client.captureToFile({ url: "https://example.com/", format: "png" }, join(dir, "shot.jpg")),
+    InvalidParamsError,
+  );
+  assert.equal(fetchImpl.calls.length, 0);
+});
+
+test("country_unavailable points at the country list and says retries do not re-run it", async () => {
+  const fetchImpl = makeFetch(jsonResponse(appErrorEnvelope("country_unavailable", 503)));
+  const client = new SiteShot("test-key", { fetchImpl, retries: 2 });
+  await assert.rejects(
+    client.capture({ url: "https://example.com/", country: "AQ", strict_country: true }),
+    (err) => {
+      assert.ok(err instanceof CountryUnavailableError);
+      assert.ok(err.message.includes("https://www.site-shot.com/countries/"), err.message);
+      return true;
+    },
+  );
+  assert.equal(fetchImpl.calls.length, 1);
+});
+
+test("a client-side abort says the capture may still count", async () => {
+  const fetchImpl = makeFetch((url, init) => new Promise((resolve, reject) => {
+    init.signal.addEventListener("abort", () => {
+      reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+    });
+  }));
+  const client = new SiteShot("test-key", { fetchImpl, timeoutMs: 20 });
+  await assert.rejects(client.capture({ url: "https://example.com/" }), (err) => {
+    assert.ok(err instanceof SiteShotTimeoutError);
+    assert.ok(err.message.includes("may still count"), err.message);
+    return true;
+  });
+});

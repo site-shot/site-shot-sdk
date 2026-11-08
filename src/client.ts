@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { writeFile } from "node:fs/promises";
+import { extname } from "node:path";
 
 import {
   APIError,
@@ -18,7 +19,11 @@ const DEFAULT_BASE_URL = "https://api.site-shot.com/";
 const SDK_VERSION = "0.2.1";
 /** The API's own default server-side render deadline (`timeout` param), ms. */
 const DEFAULT_SERVER_TIMEOUT_MS = 60_000;
-/** Client-side headroom on top of the server deadline, so the server always answers first. */
+/**
+ * Client-side headroom on top of the server `timeout`. The API can take longer
+ * than `timeout` + headroom (it retries hard pages server-side), so this is a
+ * cap on the wait, not a guarantee that the server answers first.
+ */
 const CLIENT_TIMEOUT_HEADROOM_MS = 30_000;
 
 export interface SiteShotOptions {
@@ -26,8 +31,9 @@ export interface SiteShotOptions {
   baseUrl?: string;
   /**
    * Client-side abort deadline in milliseconds. Default: the per-call server
-   * `timeout` param (or its API default of 60000) plus 30s headroom, so the
-   * server always gets to answer first.
+   * `timeout` param (or its API default of 60000) plus 30s headroom. The API
+   * may still be working when the client gives up (it retries hard pages
+   * server-side), and an aborted request may still count as a capture.
    */
   timeoutMs?: number;
   /**
@@ -67,13 +73,17 @@ export interface CaptureOptions {
   /**
    * Image format. API default: `png`. `png` and `webp` are lossless; `webp`
    * is typically about 35% smaller than `png`. `jpeg` is lossy. WebP is
-   * limited to 16,383 px per side (taller full-page captures are cut from
-   * the top).
+   * limited to 16,383 px per side: a taller full-page capture keeps only its
+   * top 16,383 px and the rest is cut off (use `png` for taller pages).
    */
   format?: "png" | "jpeg" | "webp";
   /** Wait this many ms before capturing, 0–60000. API default: 500. */
   delay_time?: number;
-  /** Server-side render deadline in ms, 0–120000. API default: 60000. */
+  /**
+   * Renderer time budget per attempt in ms, 0–120000. API default: 60000. It
+   * does not cap the whole request: the API adds its own overhead and may
+   * retry hard pages, so a request can take noticeably longer than this.
+   */
   timeout?: number;
   /** Custom User-Agent for the rendering browser. */
   user_agent?: string;
@@ -117,7 +127,16 @@ export interface CaptureOptions {
   language?: string;
   /** IANA time-zone name, e.g. `"Europe/Berlin"`. */
   time_zone?: string;
-  /** Unknown options pass through to the API verbatim. */
+  /**
+   * Give the page a working (software) WebGL context. Detectable by bot
+   * protection, so off unless the page needs it. API default: 0.
+   */
+  webgl?: boolean | 0 | 1;
+  /**
+   * Unknown options pass through to the API verbatim. API parameter names are
+   * lowercase snake_case: a camelCase name (`fullSize`) is refused with
+   * {@link InvalidParamsError} before anything is sent.
+   */
   [param: string]: unknown;
 }
 
@@ -125,10 +144,30 @@ export interface CaptureOptions {
 export interface CaptureResult {
   /** Base64-encoded image, possibly prefixed with `data:image/...;base64,`. */
   image?: string;
-  /** Rendered HTML (only when `source_code` was requested). */
+  /**
+   * Rendered HTML (only when `source_code` was requested). It can be absent
+   * even then, e.g. on a slow page; `source_code_status` says why.
+   */
   source_code?: string;
+  /** Outcome of the `source_code` request, e.g. `"ok"`. */
+  source_code_status?: string;
+  /**
+   * What the rendered page answered. `status_code` is the page's (or the
+   * renderer's) status, e.g. `"200"` or `504`; it is not the API's HTTP status.
+   */
+  response?: { status_code?: string | number; headers?: unknown };
+  /** The parameters the API actually used, after its own defaults and clamping. */
+  screenshot_parameters?: Record<string, unknown>;
   [field: string]: unknown;
 }
+
+/** File extensions `captureToFile` maps to a `format`. */
+const FORMAT_BY_EXTENSION: Record<string, "png" | "jpeg" | "webp"> = {
+  ".png": "png",
+  ".jpg": "jpeg",
+  ".jpeg": "jpeg",
+  ".webp": "webp",
+};
 
 /** Params the SDK owns; silently dropped if passed per call. */
 const RESERVED_PARAMS = new Set(["url", "userkey", "response_type", "request_headers"]);
@@ -216,7 +255,9 @@ function classifyError(status: number, errorText: string | undefined, body: unkn
   if (lower === "country_unavailable") {
     return new CountryUnavailableError(
       "The requested country has no available capacity right now (country_unavailable). " +
-        "Retry later, or drop strict_country to allow the default US fallback.",
+        "Retry later, or drop strict_country to allow the default US fallback. If it keeps " +
+        "failing, the country may not be offered: see https://www.site-shot.com/countries/ " +
+        "(the SDK's `retries` option does not re-run this).",
       opts,
     );
   }
@@ -373,6 +414,17 @@ export class SiteShot {
    * Capture a screenshot and write it to `filePath`.
    */
   async captureToFile(options: CaptureOptions, filePath: string): Promise<void> {
+    // Without an explicit `format`, the extension picks it, so `shot.jpg`
+    // holds JPEG bytes rather than the API's default PNG.
+    const fromExtension = FORMAT_BY_EXTENSION[extname(filePath).toLowerCase()];
+    if (options.format === undefined && fromExtension) {
+      options = { ...options, format: fromExtension };
+    } else if (fromExtension && String(options.format).toLowerCase() !== fromExtension) {
+      throw new InvalidParamsError(
+        `format "${String(options.format)}" does not match the file extension of "${filePath}". ` +
+          "Drop format to follow the extension, or rename the file.",
+      );
+    }
     await writeFile(filePath, await this.capture(options));
   }
 
@@ -421,7 +473,9 @@ export class SiteShot {
         } catch (err) {
           if (isAbortError(err)) {
             throw new SiteShotTimeoutError(
-              `Site-Shot request timed out after ${timeoutMs} ms (client-side abort).`,
+              `Site-Shot request timed out after ${timeoutMs} ms (client-side abort). The API ` +
+                "had already received the request, so the capture may still count; raise " +
+                "timeoutMs to wait longer.",
               { cause: err },
             );
           }
@@ -445,7 +499,7 @@ export class SiteShot {
           if (isAbortError(err) || controller.signal.aborted) {
             throw new SiteShotTimeoutError(
               `Site-Shot request timed out after ${timeoutMs} ms while downloading ` +
-                "the response body (client-side abort).",
+                "the response body (client-side abort). The capture may still count.",
               { httpStatus: res.status, cause: err },
             );
           }
@@ -480,6 +534,14 @@ export class SiteShot {
     params.set("userkey", this.apiKey);
     for (const [key, value] of Object.entries(options)) {
       if (RESERVED_PARAMS.has(key)) continue;
+      // The API ignores names it does not know, so a camelCase `fullSize`
+      // would silently give a viewport-only capture. Its names are snake_case.
+      if (/[A-Z]/.test(key) && value !== undefined) {
+        const snake = key.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+        throw new InvalidParamsError(
+          `Unknown option "${key}": Site-Shot options are snake_case (did you mean "${snake}"?).`,
+        );
+      }
       appendParam(params, key, value);
     }
     const headers = options.request_headers;

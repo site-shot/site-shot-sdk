@@ -19,3 +19,14 @@ const pngOptions: CaptureOptions = { url: "https://example.com/", format: "png" 
 void pngOptions;
 const jpegOptions: CaptureOptions = { url: "https://example.com/", format: "jpeg" };
 void jpegOptions;
+
+// The success envelope's documented fields are typed, so callers can read the
+// page's status (e.g. to reject a 5xx frame) without casting.
+import type { CaptureResult } from "../src/client";
+// Never called: the file also runs under `node --test`, and only has to compile.
+function readResult(result: CaptureResult): [string | number | undefined, string | undefined] {
+  return [result.response?.status_code, result.source_code_status];
+}
+void readResult;
+const webglOptions: CaptureOptions = { url: "https://example.com/", webgl: true };
+void webglOptions;
