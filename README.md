@@ -26,7 +26,7 @@ other countries need a paid plan.
 import { SiteShot } from "site-shot-sdk";
 import fs from "node:fs/promises";
 
-const client = new SiteShot("YOUR_API_KEY"); // or set SITESHOT_API_KEY in the env
+const client = new SiteShot("YOUR_API_KEY"); // or new SiteShot() to read SITESHOT_API_KEY
 
 const png = await client.capture({ url: "example.com", full_size: true });
 await fs.writeFile("shot.png", png); // png is a Buffer
@@ -59,7 +59,7 @@ One capture concept, four return modes — pick the method, not a flag:
 // 1. Bytes (primary mode) — returns a Buffer
 const png = await client.capture({ url: "https://example.com/" });
 
-// 2. Straight to a file
+// 2. Straight to a file (without `format`, .jpg/.jpeg/.webp/.png picks it)
 await client.captureToFile({ url: "https://example.com/" }, "shot.png");
 
 // 3. Base64 string (data URLs, LLM vision payloads)
@@ -67,7 +67,12 @@ const b64 = await client.captureBase64({ url: "https://example.com/" });
 
 // 4. Full JSON result (image plus metadata; add source_code for rendered HTML)
 const meta = await client.captureJson({ url: "https://example.com/", source_code: true });
+// meta.image, meta.source_code, meta.source_code_status, meta.response.status_code,
+// meta.screenshot_parameters (the values the API actually used)
 ```
+
+`source_code` can be missing even when requested (for example on a slow page);
+`source_code_status` then says why.
 
 ### `buildUrl()` — build the request URL without executing it
 
@@ -95,7 +100,7 @@ instead:
 ```js
 import { SiteShot, CountryUnavailableError } from "site-shot-sdk";
 
-const client = new SiteShot("YOUR_API_KEY", { retries: 2 }); // recommended for geo captures
+const client = new SiteShot("YOUR_API_KEY");
 
 try {
   const shot = await client.capture({
@@ -107,7 +112,8 @@ try {
   });
 } catch (e) {
   if (e instanceof CountryUnavailableError) {
-    // No live DE capacity right now — retry later or drop strict_country.
+    // No live DE capacity right now: retry later or drop strict_country.
+    // A code that keeps failing may not be offered; see /countries/.
   }
 }
 ```
@@ -121,7 +127,11 @@ Option names mirror the HTTP query parameters **verbatim** (snake_case) — the
 [API reference on the homepage](https://www.site-shot.com/#documentation) and
 this SDK share one vocabulary. Booleans are accepted and coerced to `1`/`0`.
 **Unknown options pass through verbatim**, so future API params work without an
-SDK update.
+SDK update. A camelCase name such as `fullSize` is refused with
+`InvalidParamsError` before anything is sent (the API would silently ignore it).
+Out-of-range numbers are not rejected: the API clamps them to the range (for
+example `width: 50` gives a 100 px wide image); `screenshot_parameters` in the
+`captureJson` result shows the values it used.
 
 | Option | Type / range | API default | Notes |
 |---|---|---|---|
@@ -132,9 +142,9 @@ SDK update.
 | `full_size` | boolean | false | full-page capture (height capped by `max_height`) |
 | `max_height` | int 100–20000 | 20000 | only meaningful with `full_size` |
 | `scaled_width` | int 50–10000 | — | scale result image to width |
-| `format` | `png` \| `jpeg` \| `webp` | png | `png`/`webp` lossless, `jpeg` lossy; `webp` is typically about 35% smaller than `png`; WebP capped at 16,383 px/side (taller `full_size` captures are cut from the top) |
+| `format` | `png` \| `jpeg` \| `webp` | png | `png`/`webp` lossless, `jpeg` lossy; `webp` is typically about 35% smaller than `png`; WebP capped at 16,383 px/side (a taller `full_size` capture keeps only its top 16,383 px; use `png` for taller pages) |
 | `delay_time` | int ms 0–60000 | 500 | wait before capture (SPAs, animations) |
-| `timeout` | int ms 0–120000 | 60000 | server-side render deadline |
+| `timeout` | int ms 0–120000 | 60000 | renderer time budget per attempt; it does not cap the whole request, which can take noticeably longer |
 | `user_agent` | string | — | custom UA for the rendering browser |
 | `request_headers` | object | — | emitted as repeated `request_header=Name:value` params |
 | `http_proxy` / `proxy_username` / `proxy_password` | string | — | bring-your-own-proxy passthrough |
@@ -148,6 +158,7 @@ SDK update.
 | `geolocation` | `"lat,lng"` | — | GPS override, independent of IP |
 | `language` | string | from `country` / en | Accept-Language |
 | `time_zone` | IANA name | America/New_York | see <https://www.site-shot.com/time-zones/> |
+| `webgl` | boolean | false | give the page a working (software) WebGL context; detectable by bot protection, so only when the page needs it |
 
 `userkey` (your API key) is owned by the `SiteShot` constructor — never a
 per-call option. `response_type` is owned by the return-mode methods.
@@ -161,6 +172,7 @@ can exceed practical URL length limits (~8 KB).
 const client = new SiteShot("YOUR_API_KEY", {
   baseUrl: "https://api.site-shot.com/",
   timeoutMs: 90_000, // client-side abort; default = the server `timeout` + 30s headroom
+                     // (an aborted request may still count as a capture)
   retries: 0,        // connection-level retries only (see below)
 });
 ```
@@ -171,29 +183,51 @@ uses.
 
 ## Errors
 
-Every error is a subclass of `SiteShotError` and carries `httpStatus` and the
-raw response `body` where available.
+Every error is a subclass of `SiteShotError` and carries, where available:
+`httpStatus` (the API's own HTTP status; a capture that failed after the API
+admitted it still answers 200), `code` (the API's `error_code`, e.g.
+`proxy_navigation_failed`), `targetStatus` (the status the page or renderer
+reported) and the raw response `body`.
 
 | Error | Thrown when |
 |---|---|
-| `AuthError` | missing or rejected API key (also thrown early by the constructor on an empty key) |
-| `QuotaError` | a paid plan's quota exhausted, the free plan's 100 captures for the month used up (HTTP 403 until it renews), a `country` other than US on the free plan (Site-Shot refuses it and returns an error instead of an image; the refused request still counts toward the month's 100), payment required, or no active subscription on the account |
-| `CountryUnavailableError` | `strict_country` capture and the requested country has no capacity right now |
-| `InvalidParamsError` | the API rejected a parameter (out-of-range width, ...) |
+| `AuthError` | missing or rejected API key (also thrown early by the constructor on an empty key or the `YOUR_API_KEY` placeholder) |
+| `QuotaError` | a paid plan's quota exhausted, the free plan's 100 captures for the month used up (HTTP 403 until it renews), a `country` other than US on the free plan (Site-Shot refuses it and returns an error instead of an image; the refused request still counts toward the month's 100), payment required, or no active subscription on the account (turn on the free plan or pick a plan at <https://www.site-shot.com/start/>) |
+| `ConcurrencyLimitError` | HTTP 429: more parallel captures than the plan allows (the free plan: one at a time). A subclass of `QuotaError`; the refused request does not count |
+| `CountryUnavailableError` | `strict_country` capture and the requested country has no capacity right now, or is not offered |
+| `InvalidParamsError` | a camelCase option name, a `captureToFile` extension that contradicts `format`, or a parameter the API rejected (out-of-range numbers are clamped, not rejected) |
 | `SiteShotTimeoutError` | client-side abort, or the API reported a render timeout |
-| `APIError` | anything else (server errors, unparseable bodies, connection failures, an unsupported `format` value) |
+| `PageLoadError` | the page could not be opened: its host did not resolve or did not answer. A subclass of `APIError` |
+| `APIError` | anything else (the target page answered an error such as 403 Forbidden, server errors, unparseable bodies, connection failures, an unsupported `format` value) |
 
 Under the hood the SDK always asks the API for a JSON response and decodes the
-image itself — so errors surface as typed exceptions instead of an error
-picture pretending to be your screenshot.
+image itself, so a failure the API reports surfaces as a typed exception
+instead of an error picture saved as your screenshot. One known gap: when a
+render runs out of time on the API side, the API can still return its
+"timeout budget" error card as a normal image. Until that is fixed in the API,
+`captureJson` lets you check `response.status_code`; a `5xx` there means the
+image may be that card (or the site's own error page).
+
+## Parallel captures
+
+Each plan allows a fixed number of captures at once; the free plan allows one.
+A request over the limit is refused with `ConcurrencyLimitError` (HTTP 429) and
+does not count. So instead of `Promise.all(urls.map(...))`, capture one after
+another (or cap concurrency at your plan's limit):
+
+```js
+for (const url of urls) {
+  await client.captureToFile({ url }, `${new URL(url).hostname}.png`);
+}
+```
 
 ## Retries
 
 Default: `0`. Screenshots cost quota, and a timed-out render may still have
 consumed one — so the SDK never auto-retries a render that completed with an
 error. The `retries` option applies to **connection-level failures only**
-(DNS, connection reset, no bytes received), with jittered backoff.
-`retries: 2` is a sensible setting for `country=` captures.
+(DNS, connection reset, no bytes received) between your code and the API,
+with jittered backoff. They do not re-run a `CountryUnavailableError`.
 
 ## Building an agent?
 
