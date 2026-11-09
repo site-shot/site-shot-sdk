@@ -1,6 +1,7 @@
 # site-shot-sdk
 
-Official Node.js SDK for the [Site-Shot](https://www.site-shot.com/) screenshot API.
+Website screenshot API SDK for Node.js: the official client for the
+[Site-Shot](https://www.site-shot.com/) screenshot API.
 
 ```bash
 npm install site-shot-sdk
@@ -17,8 +18,10 @@ account's API key comes with the **free plan**: 100 API captures a month, no
 card needed, renewing every month. Accounts confirmed before 2026-10-30 switch
 it on with one button on `/start/`; an account that has had a paid plan before
 does not get the free plan. Paid plans start at **$5/mo** (X-Lite, 2,000
-screenshots). Free-plan captures come from the default location or the US;
-other countries need a paid plan.
+screenshots). Free-plan captures come from the default location or the US
+(other countries need a paid plan) and run on one worker: a second parallel
+request gets HTTP 429. When the month's captures are spent the API answers
+HTTP 403 until the allowance renews.
 
 ## Quickstart
 
@@ -177,7 +180,7 @@ raw response `body` where available.
 | Error | Thrown when |
 |---|---|
 | `AuthError` | missing or rejected API key (also thrown early by the constructor on an empty key) |
-| `QuotaError` | a paid plan's quota exhausted, the free plan's 100 captures for the month used up (HTTP 403 until it renews), a `country` other than US on the free plan (Site-Shot refuses it and returns an error instead of an image; the refused request still counts toward the month's 100), payment required, or no active subscription on the account |
+| `QuotaError` | a paid plan's quota exhausted, the free plan's 100 captures for the month used up (HTTP 403 until it renews), a `country` other than US on the free plan (Site-Shot refuses it and returns an error instead of an image; the refused request still counts toward the month's 100), a second parallel request on a free-plan key (HTTP 429: the free plan runs one capture at a time), payment required, or no active subscription on the account |
 | `CountryUnavailableError` | `strict_country` capture and the requested country has no capacity right now |
 | `InvalidParamsError` | the API rejected a parameter (out-of-range width, ...) |
 | `SiteShotTimeoutError` | client-side abort, or the API reported a render timeout |
@@ -200,8 +203,8 @@ error. The `retries` option applies to **connection-level failures only**
 If your agent drives a browser, it can screenshot pages itself — the right tool for pages that must
 be signed into or stepped through a flow. For public URLs, delegating the capture to the API is
 usually better engineering: the same pipeline on every request, country-specific vantage points
-(`country` + `strict_country`), every frame validated before it is returned, and a fraction of a cent
-per capture instead of a browser session plus vision tokens per look. The full comparison:
+(`country` + `strict_country`, on paid plans), every frame validated before it is returned, and a
+fraction of a cent per capture on a paid plan instead of a browser session per look. The full comparison:
 [AI agent vs. screenshot API — who should capture the page](https://www.site-shot.com/blog/ai-agent-vs-screenshot-api/).
 
 ## Requirements
